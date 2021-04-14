@@ -225,6 +225,7 @@ def getUserIdRS(f):
     #take away extension
     parts=f.split("_")
     return parts[0]
+#Folder should be an attack
 def getpyHImagesFromFolderRS(path_base,ext="jpg",size=0.125):
     images=[]
     for f in sorted(listdir(path_base))[:]:
@@ -254,7 +255,7 @@ def getpyHImagesFromUserRS(path_base,ext="jpg",size=0.125):
 
 def getpyHImagesAllRS(path_base,ext='jpg',size=0.25):
     allImgs={}
-    for dr in listdir(path_base)[:2]:
+    for dr in listdir(path_base)[:10]:
         dirpath=os.path.join(path_base,dr)
         if os.path.isdir(dirpath):
             print dr
@@ -373,6 +374,9 @@ def asLists(dataImages):
     #each image has only a face
     for pyImg,detection,shape,descriptor in dataImages:
         pyHimgs.append(pyImg)
+        if len(detection)==0:
+            print "Not detections in asLists"
+            continue
         detections.append(np.array(detection[0]))
         shapes.append(np.array(shape[0]))
         descriptors.append(np.array(descriptor[0]))
@@ -424,7 +428,8 @@ def getConfusionMatrixKL(allRS,uid):
             dif=gmm_kl(attBMoG[bmogH],attBMoG[bmogV])
             #dif=multivariate_normal.pdf(attMean[a1],attMean[a0],attSdev[a0])
             #print "dif=",dif
-            print uid,":   KL:",bmogH," -> ",bmogV,"=",dif
+            #print uid,":   KL:",bmogH," -> ",bmogV,"=",dif
+            print uid,",KL,",bmogH,",",bmogV,",",dif
             tf=pyHTextFigure(0,0,40,40,dif)
             if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
             if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
@@ -433,7 +438,7 @@ def getConfusionMatrixKL(allRS,uid):
         for j,bmogV in enumerate(sorted(attBMoG)):
             #score=attBMoG[bmogV].score([attDesc[bmogH]])
             score=attBMoG[bmogV].score([attDesc[bmogH]])
-            print uid,":Score:",bmogH," -> ",bmogV,"=",score
+            #print uid,":Score:",bmogH," -> ",bmogV,"=",score
             tf=pyHTextFigure(0,0,40,40,score)
             if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
             if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
@@ -455,12 +460,12 @@ def getConfusionMatrix(allRS,uid):
     gfv=pyHGridFigure(  0,   0, 5, 1)
     ''' means '''
     for i,att in enumerate(sorted(allRS[uid])):
-        if len(allRS[uid][att])==0:
+        if len(allRS[uid][att])<3:
             continue
         pyHimg,detections,shapes,descriptors=allRS[uid][att][0]
         #if len(descriptors)<2: continue
-        attMean[att]=meanDescriptors(allRS[uid][att])
-        attSdev[att]=sdevDescriptors(allRS[uid][att])
+        attMean[att]=meanDescriptors(allRS[uid][att][1:])
+        attSdev[att]=sdevDescriptors(allRS[uid][att][1:])
         imgfh=bestFitImageFigure(pyHImage(pyHimg))
         imgfv=bestFitImageFigure(pyHImage(pyHimg))
         imgfh.setColor(0,255,0)
@@ -512,10 +517,11 @@ class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
         
         path_base="/home/francisco/datasets/datasets/pictures/FRAV-Attack/RS/NIR/faces_NIR"
         dump=1
-        if dump==1:
+        if dump==0:
             allRS=getpyHImagesAllRS(path_base,"jpg")
             pickle_file = file('20RS.p', 'w')
             pickle.dump(allRS,pickle_file)
+            pickle_file.close()
         else:
             print "Loadidng data, please wait...."
             pickled_file = open('20RS.p')
@@ -523,12 +529,13 @@ class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
             allRS = pickle.load(pickled_file)
             print "Loaded data, thank you."
             
-        gf=pyHGridFigure(0,0,23,6,440,240)
+        gf=pyHGridFigure(0,0,3,3,440,240)
         #gf=pyHGridFigure(0,0,10,12,440,240)
         for uid in sorted(allRS)[:]:
             if len(allRS[uid])!=5:
                continue
-            cf=getConfusionMatrixKL(allRS,uid)
+            #cf=getConfusionMatrixKL(allRS,uid)
+            cf=getConfusionMatrix(allRS,uid)
             gf.addFigure(cf)
         d.addFigure(gf)
         
