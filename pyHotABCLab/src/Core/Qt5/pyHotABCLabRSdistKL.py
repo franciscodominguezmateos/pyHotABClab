@@ -327,19 +327,15 @@ def bmog(l):
     
 #https://stackoverflow.com/questions/26079881/kl-divergence-of-two-gmms
 #There's no closed form for the KL divergence between GMMs. You can easily do Monte Carlo, though. Recall that KL(p||q) = \int p(x) log(p(x) / q(x)) dx = E_p[ log(p(x) / q(x)). So:
-
-def gmm_kl(gmm_p, gmm_q, n_samples=10**5):
+def gmm_kl(gmm_p, gmm_q, n_samples=10**3):
     X,y = gmm_p.sample(n_samples)
     log_p_X = gmm_p.score_samples(X)
     log_q_X = gmm_q.score_samples(X)
     return log_p_X.mean() - log_q_X.mean()
 
 #(mean(log(p(x) / q(x))) = mean(log(p(x)) - log(q(x))) = mean(log(p(x))) - mean(log(q(x))) is somewhat cheaper computationally.)
-
 #You don't want to use scipy.stats.entropy; that's for discrete distributions.
-
 #If you want the symmetrized and smoothed Jensen-Shannon divergence KL(p||(p+q)/2) + KL(q||(p+q)/2) instead, it's pretty similar:
-
 def gmm_js(gmm_p, gmm_q, n_samples=10**5):
     X = gmm_p.sample(n_samples)
     log_p_X, _ = gmm_p.score_samples(X)
@@ -356,6 +352,7 @@ def gmm_js(gmm_p, gmm_q, n_samples=10**5):
 
 #(log_mix_X/log_mix_Y are actually the log of twice the mixture densities; pulling that out of the mean operation saves some flops.)
 
+#Split the list in lists
 def asLists(dataImages):
     pyHimgs=[]
     detections=[]
@@ -365,12 +362,9 @@ def asLists(dataImages):
     #each image has only a face
     for pyImg,detection,shape,descriptor in dataImages:
         pyHimgs.append(pyImg)
-        if len(detection)==0:
-            print "Not detections in asLists"
-            continue
-        detections.append(np.array(detection[0]))
-        shapes.append(np.array(shape[0]))
-        descriptors.append(np.array(descriptor[0]))
+        detections.append(detection)
+        shapes.append(shape)
+        descriptors.append(descriptor)
     return pyHimgs,detections,shapes,descriptors
 
 def getConfusionMatrixKL(allRS,uid):
@@ -381,15 +375,13 @@ def getConfusionMatrixKL(allRS,uid):
     ''' HEADs '''
     gfh=pyHGridFigure( 40, 200, 1,10)
     gfv=pyHGridFigure(  0,   0, 5, 1)
-    ''' means '''
-    for i,att in enumerate(sorted(allRS[uid])):
-        if len(allRS[uid][att])==0:
+    attacks=sorted(allRS[uid])
+    for i,att in enumerate(attacks):
+        if len(allRS[uid][att])<2:
+            print uid,att,len(allRS[uid][att])
             continue
-        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att])
-        if len(descriptors)<4:
-            print("Less than 2 images uid=",uid,"attack=",att) 
-            continue
-        attBMoG[att]=bmog(descriptors[1:])
+        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att][1:])
+        attBMoG[att]=bmog(descriptors)
         imgfh=bestFitImageFigure(pyHImage(pyHimg[0]))
         imgfv=bestFitImageFigure(pyHImage(pyHimg[0]))
         imgfh.setColor(0,255,0)
@@ -400,19 +392,22 @@ def getConfusionMatrixKL(allRS,uid):
         gfv.addFigure(imgfv)
     ''' sample 1 '''
     for i,att in enumerate(sorted(allRS[uid])):
-        if len(allRS[uid][att])==0:
+        if len(allRS[uid][att])<2:
             continue
-        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att])
-        if len(descriptors)<2:
-            print("Less than 2 images uid=",uid,"attack=",att) 
-            continue
-        #print att,len(allRS[uid][att]),len(detections),len(descriptors)
-        attDesc[att]=descriptors[0]
-        imgfh=bestFitImageFigure(pyHImage(pyHimg[1]))
+        pyHimg,detection,shape,descriptor=allRS[uid][att][0]
+        attDesc[att]=descriptor
+        imgfh=bestFitImageFigure(pyHImage(pyHimg))
         gfh.addFigure(imgfh)
     cf.addFigure(gfv)        
     cf.addFigure(gfh)
     ''' BODY '''
+    confusion=np.zeros((5,5))
+    for i,bmogH in enumerate(sorted(attBMoG)):
+        for j,bmogV in enumerate(sorted(attBMoG)):
+            score=attBMoG[bmogV].score([attDesc[bmogH]])
+            confusion[i][j]=score
+    confusionMax=np.max(confusion,axis=0)
+    #print "max confusion=",confusionMax
     pmf=pyHGridFigure(40,0,5,10,40)
     for i,bmogH in enumerate(sorted(attBMoG)):
         for j,bmogV in enumerate(sorted(attBMoG)):
@@ -420,11 +415,12 @@ def getConfusionMatrixKL(allRS,uid):
             #dif=multivariate_normal.pdf(attMean[a1],attMean[a0],attSdev[a0])
             #print "dif=",dif
             #print uid,":   KL:",bmogH," -> ",bmogV,"=",dif
-            print uid,",KL,",bmogH,",",bmogV,",",dif
+            #print uid,",KL,",bmogH,",",bmogV,",",dif
             tf=pyHTextFigure(0,0,40,40,dif)
             if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
             if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
             if dif<0.1: tf.setFillColor(255, 0, 0, 100)
+            #if j<5 and score-confusionMax[4]<0 and i==4: tf.setFillColor(255, 0, 0, 100)
             pmf.addFigure(tf)
         for j,bmogV in enumerate(sorted(attBMoG)):
             #score=attBMoG[bmogV].score([attDesc[bmogH]])
@@ -433,13 +429,17 @@ def getConfusionMatrixKL(allRS,uid):
             tf=pyHTextFigure(0,0,40,40,score)
             if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
             if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
-            if abs(score)<500: tf.setFillColor(255, 0, 0, 100)
+            if score==confusionMax[j-5]: tf.setFillColor(255, 0, 0, 100)
             pmf.addFigure(tf)
     cf.addFigure(pmf)
     cf.addFigure(fid)
-    print
+    #print
     return cf
-
+def notDetection(userData,uid):
+    for att in sorted(userData):
+        if len(userData[att])<10:
+            return True
+    False
 class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
     def __init__(self):
         super(pyHCVEditor, self).__init__()
@@ -464,11 +464,14 @@ class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
             allRS = pickle.load(pickled_file)
             print "Loaded data, thank you."
             
-        gf=pyHGridFigure(0,0,3,3,440,240)
+        gf=pyHGridFigure(0,0,11,11,440,240)
         #gf=pyHGridFigure(0,0,10,12,440,240)
-        for uid in sorted(allRS)[:3]:
-            if len(allRS[uid])!=5:
-               continue
+        for uid in sorted(allRS)[:]:
+            if len(allRS[uid])!=5:           continue
+            if notDetection(allRS[uid],uid): continue
+            print uid
+                #for fName,detection,shape,descriptor in allRS[uid][att]:
+                #    print "   ",fName,len(detection)
             cf=getConfusionMatrixKL(allRS,uid)
             gf.addFigure(cf)
         d.addFigure(gf)

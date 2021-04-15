@@ -64,7 +64,11 @@ class ABCFace:
         self.fileName=""
         self.filePath=""
         
-class ABCFaceEmbedding(ABCFace):
+#Face data is one:
+# - rectangle, detection top,left,width,height
+# - shape, with 68 landmarks
+# - descriptor, 128 dim vector embbeding
+class ABCFaceData(ABCFace):
     fsd=FaceShapeDetection()
     def __init__(self):
         self.descriptor=None
@@ -75,14 +79,16 @@ class ABCFaceEmbedding(ABCFace):
         #print file_jpg
         #print uid,file_jpg
         pyHImg=pyHImage(file_jpg,size)
-        imgi=pyHImg.getData()
+        imgi=pyHImg.getData() #OpenCV data
         imgo=fsd.process(imgi)
         if len(fsd.getDetections())==0:
             return
-        self.descriptor=fsd.getDetections()
-        self.shape     =fsd.getShapes()
-        self.descriptor=fsd.getDescriptors()
-        
+        if len(fsd.getDetections())!=1:
+            print "ABCFaceData: more that one detection not allowed"        
+        self.descriptor=fsd.getDetections()[0]
+        self.shape     =fsd.getShapes()[0]
+        self.descriptor=fsd.getDescriptors()[0]
+#An attack is just one id and one faces list        
 class ABCAttack:
     def __init__(self,id):
         self.id=id
@@ -104,10 +110,12 @@ class ABCAttack:
                     continue
                 #images.append((pyHImg,fsd.getDetections(),fsd.getShapes(),fsd.getDescriptors()))
                 #fsd.getDetections(),fsd.getShapes(),fsd.getDescriptors()
+#An user is just an id and a collection of attacks
 class ABCUser:
-    def __init__(self,id):
+    def __init__(self,id,path_base=""):
         #id is the folder
         self.id=id
+        self.path_base=path_base
         self.attacks={}
     def buildFromFolder(self):
         path_base=os.path.joint(self.path_base,self.id)
@@ -118,7 +126,6 @@ class ABCUser:
                 fl=getpyHImagesFromFolderRS(dirpath,ext,size)
                 if len(fl)==0: continue
                 usrImgs[dr]=fl
-        
 class ABCLab:
     path_base="/media/francisco/FREEDOS/datasets/pictures/FRAV-Attack/RS/NIR/faces_NIR"
     def __init__(self):
@@ -168,10 +175,10 @@ class ABCLabEmbedding(ABCLab):
             if os.path.isdir(dirpath):
                 print dr
                 allImgs[dr]=getpyHImagesFromUserRS(dirpath,ext,size)
-        return allImgs
-        
+        return allImgs        
 
 fsd=FaceShapeDetection()
+#fsd.use_cnn_detector=False
 I=np.identity(128)
                     
 def setShape(pyHImg):
@@ -212,7 +219,8 @@ def getUserIdRS(f):
 #Folder should be an attack
 def getpyHImagesFromFolderRS(path_base,ext="jpg",size=0.125):
     images=[]
-    for f in sorted(listdir(path_base))[:]:
+    files=sorted(listdir(path_base))[:]
+    for f in files:
         fext=f[-3:]
         if ext == fext.lower():
             file_jpg=os.path.join(path_base,f)
@@ -222,9 +230,18 @@ def getpyHImagesFromFolderRS(path_base,ext="jpg",size=0.125):
             imgi=pyHImg.getData()
             imgo=fsd.process(imgi)
             if len(fsd.getDetections())==0:
+                #print "0 detections in ",f
+                continue
+            if len(fsd.getDetections())!=1:
+                #print "More than one detections in ",f
                 continue
             #images.append((pyHImg,fsd.getDetections(),fsd.getShapes(),fsd.getDescriptors()))
-            images.append((file_jpg,fsd.getDetections(),fsd.getShapes(),fsd.getDescriptors()))
+            #this must be numpy array
+            detection =fsd.getDetections()[0]
+            shape     =fsd.getShapes()[0]
+            descriptor=fsd.getDescriptors()[0]
+            images.append((file_jpg,detection,shape,descriptor))
+    print len(images)," of ",len(files)," in ",path_base
     return images
 def getpyHImagesFromUserRS(path_base,ext="jpg",size=0.125):
     usrImgs={}
@@ -239,34 +256,14 @@ def getpyHImagesFromUserRS(path_base,ext="jpg",size=0.125):
 
 def getpyHImagesAllRS(path_base,ext='jpg',size=0.25):
     allImgs={}
-    for dr in sorted(listdir(path_base)[:]):
+    dirs=sorted(listdir(path_base))
+    for dr in dirs[:]:
         dirpath=os.path.join(path_base,dr)
         if os.path.isdir(dirpath):
             print dr
             allImgs[dr]=getpyHImagesFromUserRS(dirpath,ext,size)
     return allImgs
 
-def npDescriptors(ld):
-    l=[]
-    for pyHimg,detections,shapes,descriptors in ld:
-        for d in descriptors:
-            l.append(d)
-    npl=np.array(l)
-    #print npl.shape
-    return npl
-
-def meanDescriptors(ld):
-    npl=npDescriptors(ld)
-    #print npl.shape
-    mean=np.mean(npl,axis=0)
-    #print mean.shape
-    return mean
-def sdevDescriptors(ld):
-    npl=npDescriptors(ld)
-    #print npl.shape
-    sdev=np.std(npl,axis=0)
-    #print mean.shape
-    return sdev
 #Compute Bayesian Gaussian Mixture Model or Bayesian Mixture of Gaussians
 #There are two versions Dirichlet distribution prior and dirichlet process prior 
 # the second seem to work better
@@ -316,6 +313,7 @@ def gmm_js(gmm_p, gmm_q, n_samples=10**5):
 
 #(log_mix_X/log_mix_Y are actually the log of twice the mixture densities; pulling that out of the mean operation saves some flops.)
 
+#Split the list in lists
 def asLists(dataImages):
     pyHimgs=[]
     detections=[]
@@ -325,92 +323,46 @@ def asLists(dataImages):
     #each image has only a face
     for pyImg,detection,shape,descriptor in dataImages:
         pyHimgs.append(pyImg)
-        if len(detection)==0:
-            print "Not detections in asLists"
-            continue
-        detections.append(np.array(detection[0]))
-        shapes.append(np.array(shape[0]))
-        descriptors.append(np.array(descriptor[0]))
+        detections.append(detection)
+        shapes.append(shape)
+        descriptors.append(descriptor)
     return pyHimgs,detections,shapes,descriptors
 
-def getConfusionMatrixKL(allRS,uid):
-    attBMoG={}
-    attDesc={}
-    cf=pyHCompositeFigure()
-    fid=pyHTextFigure(0,200,40,40,uid[5:])
-    ''' HEADs '''
-    gfh=pyHGridFigure( 40, 200, 1,10)
-    gfv=pyHGridFigure(  0,   0, 5, 1)
-    ''' means '''
-    for i,att in enumerate(sorted(allRS[uid])):
-        if len(allRS[uid][att])==0:
-            continue
-        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att])
-        if len(descriptors)<4:
-            print("Less than 2 images uid=",uid,"attack=",att) 
-            continue
-        attBMoG[att]=bmog(descriptors[1:])
-        imgfh=bestFitImageFigure(pyHImage(pyHimg[0]))
-        imgfv=bestFitImageFigure(pyHImage(pyHimg[0]))
-        imgfh.setColor(0,255,0)
-        imgfv.setColor(0,255,0)
-        imgfh.setWidth(5)
-        imgfv.setWidth(5)
-        gfh.addFigure(imgfh)
-        gfv.addFigure(imgfv)
-    ''' sample 1 '''
-    for i,att in enumerate(sorted(allRS[uid])):
-        if len(allRS[uid][att])==0:
-            continue
-        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att])
-        if len(descriptors)<2:
-            print("Less than 2 images uid=",uid,"attack=",att) 
-            continue
-        #print att,len(allRS[uid][att]),len(detections),len(descriptors)
-        attDesc[att]=descriptors[0]
-        imgfh=bestFitImageFigure(pyHImage(pyHimg[1]))
-        gfh.addFigure(imgfh)
-    cf.addFigure(gfv)        
-    cf.addFigure(gfh)
-    ''' BODY '''
-    pmf=pyHGridFigure(40,0,5,10,40)
-    for i,bmogH in enumerate(sorted(attBMoG)):
-        for j,bmogV in enumerate(sorted(attBMoG)):
-            dif=gmm_kl(attBMoG[bmogH],attBMoG[bmogV])
-            #dif=multivariate_normal.pdf(attMean[a1],attMean[a0],attSdev[a0])
-            #print "dif=",dif
-            #print uid,":   KL:",bmogH," -> ",bmogV,"=",dif
-            print uid,",KL,",bmogH,",",bmogV,",",dif
-            tf=pyHTextFigure(0,0,40,40,dif)
-            if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
-            if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
-            if dif<0.1: tf.setFillColor(255, 0, 0, 100)
-            pmf.addFigure(tf)
-        for j,bmogV in enumerate(sorted(attBMoG)):
-            #score=attBMoG[bmogV].score([attDesc[bmogH]])
-            score=attBMoG[bmogV].score([attDesc[bmogH]])
-            #print uid,":Score:",bmogH," -> ",bmogV,"=",score
-            tf=pyHTextFigure(0,0,40,40,score)
-            if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
-            if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
-            if abs(score)<500: tf.setFillColor(255, 0, 0, 100)
-            pmf.addFigure(tf)
-    cf.addFigure(pmf)
-    cf.addFigure(fid)
-    print
-    return cf
+def npDescriptors(ld):
+    l=[]
+    for pyHimg,detections,shapes,descriptors in ld:
+        for d in descriptors:
+            l.append(d)
+    npl=np.array(l)
+    #print npl.shape
+    return npl
+
+def meanDescriptors(ld):
+    #npl=npDescriptors(ld)
+    npl=np.array(ld)
+    #print "npl=",npl.shape
+    mean=np.mean(npl,axis=0)
+    #print "mean",mean.shape
+    return mean
+def sdevDescriptors(ld):
+    #npl=npDescriptors(ld)
+    npl=ld
+    #print npl.shape
+    sdev=np.std(npl,axis=0)
+    #print mean.shape
+    return sdev
 
 def getNumbers(allRS,uid):
     attMean={}
     attSdev={}
     ''' means '''
     for i,att in enumerate(sorted(allRS[uid])):
-        attMean[att]=meanDescriptors(allRS[uid][att][:])
-        attSdev[att]=sdevDescriptors(allRS[uid][att][:])
-    for i,a0 in enumerate(sorted(attMean)[:]):
+        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att][1:])
+        attMean[att]=meanDescriptors(descriptors)
+        attSdev[att]=sdevDescriptors(descriptors)
+    for i,a0 in enumerate(sorted(attMean)):
         threshold=np.linalg.norm(attSdev[a0])
-        print uid,a0,"std:",threshold
-        for j,a1 in enumerate(sorted(attMean)[:]):
+        for j,a1 in enumerate(sorted(attMean)):
             confusion[i][j]=np.linalg.norm(attMean[a0]-attMean[a1])
     
 def getConfusionMatrix(allRS,uid):
@@ -423,15 +375,17 @@ def getConfusionMatrix(allRS,uid):
     gfh=pyHGridFigure( 40, 200, 1,10)
     gfv=pyHGridFigure(  0,   0, 5, 1)
     ''' means '''
-    for i,att in enumerate(sorted(allRS[uid])):
+    attacks=sorted(allRS[uid])
+    for i,att in enumerate(attacks):
         if len(allRS[uid][att])<2:
+            print uid,att,len(allRS[uid][att])
             continue
-        pyHimg,detections,shapes,descriptors=allRS[uid][att][0]
-        #if len(descriptors)<2: continue
-        attMean[att]=meanDescriptors(allRS[uid][att][1:])
-        attSdev[att]=sdevDescriptors(allRS[uid][att][1:])
-        imgfh=bestFitImageFigure(pyHImage(pyHimg))
-        imgfv=bestFitImageFigure(pyHImage(pyHimg))
+        pyHimg,detections,shapes,descriptors=asLists(allRS[uid][att][1:])
+        print uid,att,"des",len(descriptors),descriptors[0].shape
+        attMean[att]=meanDescriptors(descriptors)
+        attSdev[att]=sdevDescriptors(descriptors)
+        imgfh=bestFitImageFigure(pyHImage(pyHimg[0]))
+        imgfv=bestFitImageFigure(pyHImage(pyHimg[0]))
         imgfh.setColor(0,255,0)
         imgfv.setColor(0,255,0)
         imgfh.setWidth(5)
@@ -439,16 +393,13 @@ def getConfusionMatrix(allRS,uid):
         gfh.addFigure(imgfh)
         gfv.addFigure(imgfv)
     ''' sample 1 '''
-    for i,att in enumerate(sorted(allRS[uid])):
+    for i,att in enumerate(attacks):
         if len(allRS[uid][att])<2:
             print uid,att,len(allRS[uid][att])
             continue
-        pyHimg,detections,shapes,descriptors=allRS[uid][att][1]
-        if len(descriptors)<1: 
-            print "¿?¿?¿?",uid,att,len(allRS[uid][att]),len(descriptors)
-            continue
-        print att,len(allRS[uid][att]),len(detections),len(descriptors)
-        attMean["z"+att]=descriptors[0]
+        pyHimg,detection,shape,descriptor=allRS[uid][att][0]
+        #print att,len(allRS[uid][att]),len(detection),len(descriptor)
+        attMean["z"+att]=descriptor
         imgfh=bestFitImageFigure(pyHImage(pyHimg))
         gfh.addFigure(imgfh)
     cf.addFigure(gfv)        
@@ -461,13 +412,13 @@ def getConfusionMatrix(allRS,uid):
         for j,a1 in enumerate(sorted(attMean)[5:]):
             confusion[i][j]=np.linalg.norm(attMean[a0]-attMean[a1])
     confusionMin=np.min(confusion,axis=0)
-    print "min confusion=",confusionMin
+    #print "min confusion=",confusionMin
     pmf=pyHGridFigure(40,0,5,10,40)
     for i,a0 in enumerate(sorted(attMean)[:5]):
         threshold=np.linalg.norm(attSdev[a0])
         print uid,a0,"std:",threshold
         for j,a1 in enumerate(sorted(attMean)):
-            print "    -",a1
+            #print "    -",a1
             dif=np.linalg.norm(attMean[a0]-attMean[a1])
             #dif=multivariate_normal.pdf(attMean[a1],attMean[a0],attSdev[a0])
             #print "dif=",dif
@@ -475,17 +426,16 @@ def getConfusionMatrix(allRS,uid):
             if j>4 and i<5: tf.setFillColor(0, 0, 255, 100)
             if j>4 and i>=5: tf.setFillColor(255, 0, 255, 100)
             if dif==confusionMin[j-5]: tf.setFillColor(255, 0, 0, 100)
-            if j<5 and dif-confusionMin[4]<0: tf.setFillColor(255, 0, 0, 100)
+            if j<5 and dif-confusionMin[4]<0 and i==4: tf.setFillColor(255, 0, 0, 100)
             pmf.addFigure(tf)
     cf.addFigure(pmf)
     cf.addFigure(fid)
     print
     return cf
-def notDetection(userData):
-    for att in userData:
-        for fName,detection,shape,descriptor in userData[att]:
-            #print "   ",fName,len(detection),len(shape),len(descriptor)
-            if len(descriptor)<1: return True
+def notDetection(userData,uid):
+    for att in sorted(userData):
+        if len(userData[att])<2:
+            return True
     False
 class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
     def __init__(self):
@@ -511,12 +461,11 @@ class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
             allRS = pickle.load(pickled_file)
             print "Loaded data, thank you."
             
-        gf=pyHGridFigure(0,0,9,6,440,240)
+        gf=pyHGridFigure(0,0,11,12,440,240)
         #gf=pyHGridFigure(0,0,10,12,440,240)
         for uid in sorted(allRS)[:]:
-            if len(allRS[uid])!=5:
-               continue
-            if notDetection(allRS[uid]): continue
+            if len(allRS[uid])!=5:           continue
+            if notDetection(allRS[uid],uid): continue
                 #for fName,detection,shape,descriptor in allRS[uid][att]:
                 #    print "   ",fName,len(detection)
             cf=getConfusionMatrix(allRS,uid)
