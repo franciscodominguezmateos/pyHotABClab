@@ -59,6 +59,8 @@ from pyHotDraw.Images.pyHImageFilters import HistogramColor
 from pyHotDraw.Images.pyHImageFilters import FaceShapeDetection
 from pyHotDraw.Figures.pyHCompositeFigure import pyHCompositeFigure
 
+np.set_printoptions(formatter={'float': lambda x: "{0:0.2f}".format(x)})
+
 class ABCFace:
     def __init__(self):
         self.fileName=""
@@ -367,7 +369,7 @@ def asLists(dataImages):
         descriptors.append(descriptor)
     return pyHimgs,detections,shapes,descriptors
 
-def getConfusionMatrixKL(allRS,uid):
+def getConfusionMatrixScore(allRS,uid):
     attBMoG={}
     attDesc={}
     cf=pyHCompositeFigure()
@@ -434,12 +436,17 @@ def getConfusionMatrixKL(allRS,uid):
     cf.addFigure(pmf)
     cf.addFigure(fid)
     #print
-    return cf
+    return cf,confusion
 def notDetection(userData,uid):
     for att in sorted(userData):
         if len(userData[att])<10:
             return True
     False
+def countSamples(userData):
+    c=0
+    for att in sorted(userData):
+        c+=len(userData[att])
+    return c
 class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
     def __init__(self):
         super(pyHCVEditor, self).__init__()
@@ -465,16 +472,54 @@ class pyHCVEditor(QtWidgets.QMainWindow,pyHAbstractEditor):
             print "Loaded data, thank you."
             
         gf=pyHGridFigure(0,0,11,11,440,240)
+        gf=pyHGridFigure(0,0,1,3,440,240)
         #gf=pyHGridFigure(0,0,10,12,440,240)
-        for uid in sorted(allRS)[:]:
+        samplesT=0.0
+        nsamples=0.0
+        confusionMatrices={}
+        for uid in sorted(allRS)[:5]:
             if len(allRS[uid])!=5:           continue
             if notDetection(allRS[uid],uid): continue
-            print uid
+            nsamples+=1.0
+            samplesUID=countSamples(allRS[uid])
+            samplesT+=samplesUID
+            print uid,samplesUID,samplesT,nsamples,samplesT/nsamples
                 #for fName,detection,shape,descriptor in allRS[uid][att]:
                 #    print "   ",fName,len(detection)
-            cf=getConfusionMatrixKL(allRS,uid)
+            cf,confusion=getConfusionMatrixScore(allRS,uid)
+            confusionMatrices[uid]=confusion
             gf.addFigure(cf)
         d.addFigure(gf)
+        # print "Saving Confusion Matrices Score"
+        # pickle_file = file('allRSConfusionMatricesScore.p', 'w')
+        # pickle.dump(confusionMatrices,pickle_file)
+        # pickle_file.close()
+
+        print "Loadidng data, please wait...."
+        pickled_file = open('allRSConfusionMatricesScore.p')
+        confusionMatrices = pickle.load(pickled_file)
+        pickled_file.close()
+        print "Loaded data, thank you."
+        nsamples=float(len(confusionMatrices))
+        
+        cmMean=np.zeros((5,5))
+        cmMax=np.zeros((5,5))*-10e8
+        cmMin=np.ones((5,5))*10e8
+        bpcer=0
+        bpcerUid=0
+        apcer=0
+        for uid in confusionMatrices:
+            cm=confusionMatrices[uid]
+            cmMean+=cm
+            cmMax=np.maximum(cmMax,cm)
+            cmMin=np.minimum(cmMin,cm)
+            if(cm[4,4]>1580):
+                bpcer+=1.0
+                bpcerUid=uid
+        print bpcer,bpcer/nsamples,bpcerUid
+        print cmMean/nsamples
+        print cmMax
+        print cmMin
         
 #Redefinning abstract methods
     def createMenuBar(self):
